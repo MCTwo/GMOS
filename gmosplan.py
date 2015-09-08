@@ -1,129 +1,61 @@
 from __future__ import division
 import numpy
+import pyfits
 import pylab
 import tools
 import sys
 
-def write_dsim_header(F,regfile,prefix):
-    '''
-    F = an opened file (e.g. F=open(filename,'w')
-    box =
-    '''
-    box = readMaskRegion(regfile)
-    F.write('#This catalog was created by obsplan.py and is intended to be used \n')
-    F.write('#as input to the deimos slitmask software following the format \n')
-    F.write('#outlined at http://www.ucolick.org/~phillips/deimos_ref/masks.html\n')
-    F.write('#Note that the automatic generation of this file does not include\n')
-    F.write('#guide or alignment stars.\n')
-    F.write('#ttype1 = objID\n')
-    F.write('#ttype2 = ra\n')
-    F.write('#ttype3 = dec\n')
-    F.write('#ttype4 = equinox\n')
-    F.write('#ttype5 = magnitude\n')
-    F.write('#ttype6 = passband\n')
-    F.write('#ttype7 = priority_code\n')
-    F.write('#ttype8 = sample\n')
-    F.write('#ttype9 = selectflag\n')
-    F.write('#ttype10 = pa_slit\n')
-    F.write('#ttype11 = len1\n')
-    F.write('#ttype12 = len2\n')
-    #Write in the Slitmask information line
-    F.write('{0}\t{1:0.6f}\t{2:0.6f}\t2000\tPA={3:0.2f}\n'
-            .format(prefix,box[0]/15.,box[1],box[4]))
-
-def write_guide_stars(F,gs_ids,objid,ra,dec,magnitude,equinox='2000',passband='R'):
-    '''
-    F = dsim file
-    gs_ids = (list of integers)
-
-    '''
-    N = numpy.size(gs_ids)
-    # Possibly reformat radii array to enable single float input
-    if N == 1:
-        gs_ids = numpy.reshape(gs_ids,(1,))
-    for i in gs_ids:
-        mask_s = objid == i
-        if numpy.sum(mask_s) ==0:
-            print 'obsplan.write_guide_stars: no objects in catalog match the guide star id:{0}, please check your input, exiting'.format(i)
-            sys.exit()
-        ra_i = tools.deg2ra(ra[mask_s],':')
-        dec_i = tools.deg2dec(dec[mask_s],':')
-        mag_i = magnitude[mask_s][0]
-        F.write('{0}  {1}  {2}  {3}  {4:0.2f}  {5}  -1  0  1\n'
-                .format(i,ra_i,dec_i,equinox,mag_i,passband))
-
-def write_align_stars(F,as_ids,objid,ra,dec,magnitude,equinox='2000',passband='R'):
-    N = numpy.size(as_ids)
-    # Possibly reformat radii array to enable single float input
-    if N == 1:
-        as_ids = numpy.reshape(as_ids,(1,))
-    for i in as_ids:
-        mask_s = objid == i
-        if numpy.sum(mask_s) ==0:
-            print 'obsplan.write_align_stars: no objects in catalog match the alignment star id:{0}, please check your input, exiting'.format(i)
-            sys.exit()
-        ra_i = tools.deg2ra(ra[mask_s],':')
-        dec_i = tools.deg2dec(dec[mask_s],':')
-        mag_i = magnitude[mask_s][0]
-        F.write('{0}  {1}  {2}  {3}  {4:0.2f}  {5}  -2  0  1\n'
-                .format(i,ra_i,dec_i,equinox,mag_i,passband))
-
-def write_galaxies_to_dsim(F,objid,ra,dec,magnitude,priority_code,sample,selectflag,pa_slit,len1,len2,equinox='2000',passband='R'):
+def create_obstab(prefix, pixscale, objid, ra, dec, x_ccd, y_ccd, mag,
+                  priority, slitsize_x, slitsize_y, slittilt,
+                  slitpos_y='Default'):
     '''
 
     '''
-    from math import floor
-    for i in numpy.arange(numpy.size(objid)):
-        #convert deg RA to sexadec RA
-        ra_i = ra[i]/15.0
-        rah = floor(ra_i)
-        res = (ra_i-rah)*60
-        ram = floor(res)
-        ras = (res-ram)*60.
-        #convert deg dec to sexadec dec
-        dec_i = dec[i]
-        if dec_i<0:
-            sign = -1.
-            dec_i = abs(dec_i)
-        else:
-            sign = 1.
-        decd = floor(dec_i)
-        res = (dec_i-decd)*60.
-        decm = floor(res)
-        decs = (res-decm)*60.
-        if numpy.size(pa_slit) == 1:
-            pa_slit_i = pa_slit
-        else:
-            pa_slit_i = pa_slit[i]
-        if sign==-1:
-            F.write('{0:0d}\t{1:02.0f}:{2:02.0f}:{3:06.3f}\t-{4:02.0f}:{5:02.0f}:{6:06.3f}\t{7}\t{8:0.2f}\t{9}\t{10:0.0f}\t{11:0.0f}\t{12:0.0f}\t{13:0.2f}\t{14:0.1f}\t{15:0.1f}\n'
-                    .format(objid[i],rah,ram,ras,decd,decm,decs,equinox,magnitude[i],passband,priority_code[i],sample[i],selectflag[i],pa_slit_i,len1[i],len2[i]))
-        else:
-            F.write('{0:0d}\t{1:02.0f}:{2:02.0f}:{3:06.3f}\t{4:02.0f}:{5:02.0f}:{6:06.3f}\t{7}\t{8:0.2f}\t{9}\t{10:0.0f}\t{11:0.0f}\t{12:0.0f}\t{13:0.2f}\t{14:0.1f}\t{15:0.1f}\n'
-                    .format(objid[i],rah,ram,ras,decd,decm,decs,equinox,magnitude[i],passband,priority_code[i],sample[i],selectflag[i],pa_slit_i,len1[i],len2[i]))
+    # Write the header cards
+    prihdr = pyfits.Header()
+    prihdr['COMMENT'] = 'GMOS Object Table for use with Gemini MOS Mask Preparation Software (GMMPS).'
+    prihdr['PIXSCALE'] = pixscale
+    prihdr['SLITMASK'] = prefix
+    prihdu = pyfits.PrimaryHDU(header=prihdr)
+    # Convert RA in degree to hours
+    ra_hr = ra/15.0
+    # populate 1D arrays
+    n_obj = numpy.size(ra)
+    one_array = numpy.ones(n_obj)
+    slitsize_x *= one_array
+    slittilt *= one_array
+    if slitpos_y == 'Default':
+        slitpos_y = numpy.zeros(n_obj)
+    # For the alignment star objects remove the slit size and alignment info
+    mask_star = priority == 0
+    slitsize_x[mask_star] = numpy.nan
+    slitsize_y[mask_star] = numpy.nan
+    slittilt[mask_star] = numpy.nan
+    slitpos_y[mask_star] = numpy.nan
 
-def makeSlitmaskRegion(prefix,ra,dec,pa_slit,length,sample,width=1):
-    '''
-    create a region file that maps the suggested slit of each galaxy
-    '''
-    outputname = prefix+'_slits.reg'
-    out = open(outputname,'w')
-    out.write('global color=green dashlist=8 3 width=1 font="helvetica 10 normal" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1'+'\n')
-    out.write('fk5'+'\n')
-    for i in numpy.arange(numpy.size(ra)):
-        ra_i = ra[i]
-        dec_i = dec[i]
-        length_i = length[i]
-        if numpy.size(pa_slit) == 1:
-            pa_slit_i = pa_slit
-        else:
-            pa_slit_i = pa_slit[i]
-        if sample[i] == 1:
-            color = 'green'
-        else:
-            color = 'blue'
-        out.write('box({0:1.5f},{1:1.5f},{2:1.1f}",{3:1.1f}",{4:0.0f}) # color={5}'.format(ra_i,dec_i,width,length_i,pa_slit_i,color)+'\n')
-    out.close()
+    # Define the columns and their formatting and content
+    col_id = pyfits.Column(name='ID', format='K', array=objid)
+    col_ra = pyfits.Column(name='RA', format='D', array=ra_hr)
+    col_dec = pyfits.Column(name='DEC', format='D', array=dec)
+    col_x_ccd = pyfits.Column(name='x_ccd', format='D', array=x_ccd)
+    col_y_ccd = pyfits.Column(name='y_ccd', format='D', array=y_ccd)
+    col_mag = pyfits.Column(name='mag', format='E', array=mag)
+    col_priority = pyfits.Column(name='priority', format='I', array=priority)
+    col_slitsize_x = pyfits.Column(name='slitsize_x', format='E', array=slitsize_x)
+    col_slitsize_y = pyfits.Column(name='slitsize_y', format='E', array=slitsize_y)
+    col_slittilt = pyfits.Column(name='slittilt', format='E', array=slittilt)
+    col_slitpos_y = pyfits.Column(name='slitpos_y', format='E', array=slitpos_y)
+    # define column order
+    cols = pyfits.ColDefs([col_id, col_ra, col_dec, col_x_ccd, col_y_ccd,
+                           col_mag, col_priority, col_slitsize_x,
+                           col_slitsize_y, col_slittilt, col_slitpos_y])
+    # populate table hdu
+    tbhdu = pyfits.BinTableHDU.from_columns(cols)
+    # create list containing header and data
+    thdulist = pyfits.HDUList([prihdu, tbhdu])
+    filename = prefix + '_objtab.fits'
+    thdulist.writeto(filename, clobber=True)
+    print 'gmosplan: Finished writing object table fits file.'
 
 def plotcoverage(redshift,lambda_central,filename=None):
     '''
